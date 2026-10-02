@@ -10,7 +10,7 @@ class Settings(BaseSettings):
     postgres_user: str = "methane_app"
     postgres_password: str = "methane_dev_password"
     postgres_host: str = "localhost"
-    postgres_port: int = 5433
+    postgres_port: int = 5432
     cors_origins: str = "http://localhost:3000,http://localhost:5173"
 
     model_config = SettingsConfigDict(

@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#050a15">
+<script>
+  // day or night, applied before the first paint so a day visitor never sees a dark flash: ?theme=light or ?theme=dark wins (a link can open either), then the choice saved last time, then night
+  let theme = new URLSearchParams(location.search).get('theme');
+  try { if (theme !== 'light' && theme !== 'dark') theme = localStorage.getItem('mrs:theme'); } catch (e) { /* storage blocked */ }
+  if (theme === 'light') { document.documentElement.dataset.theme = 'light'; document.querySelector('meta[name=color-scheme]').content = 'light'; document.querySelector('meta[name=theme-color]').content = '#edf2f8'; }
+</script>
+<title>MIRA: Methane Incident Response &amp; Action</title>
+<meta name="description" content="Turns satellite methane detections into tickets: the likely source, the climate impact, the best fix, and a satellite check that the fix worked.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23050a15'/%3E%3Ccircle cx='15' cy='17' r='8' fill='none' stroke='%23e8eef9' stroke-width='2.4'/%3E%3Ccircle cx='23' cy='9' r='3.6' fill='%23ff5d57'/%3E%3C/svg%3E">
+<script>
+  // preload the two fonts the first screen needs; skipped on file://, where browsers refuse CORS font preloads and only log errors
+  if (location.protocol !== 'file:') for (const f of ['barlow-latin-400-normal', 'barlow-semi-condensed-latin-600-normal']) {
+    const l = document.createElement('link'); l.rel = 'preload'; l.as = 'font'; l.type = 'font/woff2'; l.crossOrigin = ''; l.href = `fonts/${f}.woff2`; document.head.append(l);
+  }
+</script>
+<link rel="stylesheet" href="vendor/maplibre-gl.css">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<a class="skip" href="#queue">Skip to the ticket list</a>
+
+<header class="bar">
+  <div class="brand">
+    <svg class="logo" viewBox="0 0 28 28" aria-hidden="true"><circle cx="13" cy="15" r="9" fill="none" stroke="currentColor" stroke-width="2.2"/><circle cx="21.5" cy="6.5" r="3.6" fill="var(--open)"/></svg>
+    <h1 translate="no">MIRA<span class="vh">, Methane Incident Response &amp; Action</span></h1>
+    <span class="desk">Regulator desk</span>
+    <span class="ph" id="ph" hidden>Placeholder data</span>
+  </div>
+
+  <div class="readouts" id="readouts" role="group" aria-label="Progress summary">
+    <div class="ro">
+      <span class="ro-l">Remaining emissions</span>
+      <span class="ro-v" id="k-rem">0 t/h</span>
+      <span class="ro-d" id="k-rem-d"></span>
+    </div>
+    <div class="ro" title="Counted on a 100-year basis, for plumes a satellite has confirmed are fixed.">
+      <span class="ro-l">Avoided so far</span>
+      <span class="ro-v" id="k-avoid">0 t</span>
+      <span class="ro-d" id="k-avoid-d">CO<sub>2</sub>e a year</span>
+    </div>
+    <div class="ro">
+      <span class="ro-l">Tickets verified</span>
+      <span class="ro-v" id="k-ver">0 of 0</span>
+      <div class="meter" id="k-meter" role="img"></div>
+    </div>
+  </div>
+
+  <div class="actions">
+    <button class="btn" id="b-tour" type="button" title="Plays a 90-second walkthrough, starting from a fresh demo"><svg class="ic" aria-hidden="true"><use href="#i-play"/></svg>Play demo tour</button>
+    <button class="btn primary pass" id="b-pass" type="button" title="Runs a simulated satellite pass. It checks every ticket that is waiting for verification."><svg class="ic" aria-hidden="true"><use href="#i-orbit"/></svg><span class="pass-t"><span>Next satellite pass</span><small id="clock-d"></small></span></button>
+    <button class="btn icon" id="b-theme" type="button" aria-label="Switch to day mode" title="Switch to day mode"><svg class="ic" aria-hidden="true"><use href="#i-sun"/></svg></button>
+    <button class="btn icon" id="b-reset" type="button" aria-label="Reset demo" title="Reset demo"><svg class="ic" aria-hidden="true"><use href="#i-reset"/></svg></button>
+  </div>
+</header>
+
+<main class="stage" id="stage" data-drawer="closed">
+  <div id="map" role="region" aria-label="Map of methane hotspots. The ticket list has the same information."></div>
+  <div id="labels" aria-hidden="true"></div>
+  <p class="nomap" id="nomap">Loading the map…</p>
+
+  <section class="panel queue" id="queue" aria-label="Tickets and countries" data-sheet="mid" tabindex="-1">
+    <button class="grab" id="grab" type="button" aria-expanded="true" aria-controls="queue-body"><span class="grab-bar" aria-hidden="true"></span><span class="vh">Show fewer tickets</span></button>
+    <div class="tabs" role="tablist" aria-label="View">
+      <button type="button" role="tab" id="tab-tickets" aria-selected="true" aria-controls="pane-tickets" data-tab="tickets">Tickets <span class="n" id="n-tickets"></span></button>
+      <button type="button" role="tab" id="tab-countries" aria-selected="false" aria-controls="pane-countries" data-tab="countries" tabindex="-1">Countries <span class="n" id="n-countries"></span></button>
+      <button type="button" role="tab" id="tab-compliance" aria-selected="false" aria-controls="pane-compliance" data-tab="compliance" tabindex="-1">Compliance <span class="n" id="n-compliance"></span></button>
+    </div>
+    <div class="queue-body" id="queue-body">
+      <div role="tabpanel" id="pane-tickets" aria-labelledby="tab-tickets" class="pane">
+        <div class="search">
+          <svg class="ic" aria-hidden="true"><use href="#i-search"/></svg>
+          <input id="q" name="q" type="search" placeholder="Try Australia, MIRA-0013 or landfill…" aria-label="Search tickets by country, ID or source type" autocomplete="off" spellcheck="false" enterkeyhint="search">
+          <kbd aria-hidden="true">/</kbd>
+        </div>
+        <div class="filters">
+          <div class="chips" id="chips" role="group" aria-label="Filter by status"></div>
+          <label class="sel"><span class="vh">Source type</span><select id="f-sector" name="source"></select></label>
+        </div>
+        <div class="scope" id="scope" hidden></div>
+        <ul class="list" id="list" aria-label="Tickets"></ul>
+        <p class="foot" id="foot"></p>
+      </div>
+      <div role="tabpanel" id="pane-countries" aria-labelledby="tab-countries" class="pane" hidden>
+        <ul class="list" id="clist" aria-label="Countries"></ul>
+      </div>
+      <div role="tabpanel" id="pane-compliance" aria-labelledby="tab-compliance" class="pane" hidden>
+        <p class="cmp-sum" id="cmp-sum"></p>
+        <ul class="list" id="plist" aria-label="Operators"></ul>
+        <p class="foot"><span>Checks, reports and satellite results for every ticket</span><button class="link" type="button" id="b-export">Download evidence trail (CSV)</button></p>
+      </div>
+    </div>
+  </section>
+
+  <aside class="panel drawer" id="drawer" aria-label="Ticket detail" inert>
+    <div class="d-head" id="d-head"></div>
+    <div class="d-body" id="d-body"></div>
+    <div class="d-foot" id="d-foot"></div>
+  </aside>
+
+  <div class="dock">
+    <div class="tour panel" id="tour" hidden role="region" aria-label="Demo tour">
+      <p class="t-text" id="t-text" aria-live="polite"></p>
+      <div class="t-foot">
+        <div class="t-dots" id="t-dots" aria-hidden="true"></div>
+        <button class="btn sm" id="t-skip" type="button">Skip step</button>
+        <button class="btn sm" id="t-exit" type="button">Exit tour</button>
+      </div>
+    </div>
+    <div class="legend panel" id="legend">
+      <ul class="keys" aria-label="Map key">
+        <li><svg class="gl s-open" aria-hidden="true"><use href="#g-open"/></svg>Detected</li>
+        <li><svg class="gl s-work" aria-hidden="true"><use href="#g-asg"/></svg>Assigned</li>
+        <li><svg class="gl s-wait" aria-hidden="true"><use href="#g-wait"/></svg>Awaiting verification</li>
+        <li><svg class="gl s-ok" aria-hidden="true"><use href="#g-ok"/></svg>Verified</li>
+        <li><svg class="gl s-open" aria-hidden="true"><use href="#g-re"/></svg>Reopened</li>
+      </ul>
+      <div class="scale" title="Country shading counts verified reductions only. A fix that has not been confirmed by a satellite does not move the colour.">
+        <span>Share of emissions verified fixed</span>
+        <span class="scale-n">0%</span><i class="grad" aria-hidden="true"></i><span class="scale-n">100%</span>
+      </div>
+      <span class="ph ph-d" id="ph-d" hidden>Placeholder data</span>
+    </div>
+  </div>
+
+  <div class="toasts" id="toasts" role="status" aria-live="polite"></div>
+  <div class="tip" id="tip" role="tooltip" hidden></div>
+</main>
+
+<noscript><p class="nojs">This prototype needs JavaScript to draw the map and run tickets.</p></noscript>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <defs>
+    <!-- status glyphs: shape carries the state, colour reinforces it -->
+    <!-- --st-line is a hairline on light surfaces only (transparent at night); --on-status is the dark glyph on a status disc -->
+    <symbol id="g-open" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6.2" fill="currentColor" stroke="var(--st-line)"/></symbol>
+    <symbol id="g-asg" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6.6" fill="currentColor" stroke="var(--st-line)"/><circle cx="8" cy="8" r="2.7" fill="var(--on-status)"/></symbol>
+    <symbol id="g-wait" viewBox="0 0 16 16"><circle cx="8" cy="8" r="5.3" fill="none" stroke="var(--st-line)" stroke-width="3.6"/><circle cx="8" cy="8" r="5.3" fill="none" stroke="currentColor" stroke-width="2"/><path d="M8 8V3.6A4.4 4.4 0 0 1 12.4 8z" fill="currentColor" stroke="var(--st-line)" stroke-width=".6"/></symbol>
+    <symbol id="g-ok" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6.6" fill="currentColor" stroke="var(--st-line)"/><path d="M4.9 8.2l2.1 2.1 4.1-4.5" fill="none" stroke="var(--on-status)" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="g-re" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6.6" fill="currentColor" stroke="var(--st-line)"/><path d="M8 4.5v4" stroke="var(--on-status)" stroke-width="1.9" stroke-linecap="round"/><circle cx="8" cy="11.3" r="1" fill="var(--on-status)"/></symbol>
+    <!-- source icons and UI icons: 24px grid, 1.75 stroke -->
+    <symbol id="i-flame" viewBox="0 0 24 24"><path d="M12 3s5 3.6 5 9a5 5 0 0 1-10 0c0-2.2 1-3.6 2-4.6.3 1.6 1.2 2.4 2.3 2.6C11.2 7.5 11.4 5 12 3z"/></symbol>
+    <symbol id="i-mine" viewBox="0 0 24 24"><path d="M3 19l6-10 4 6 2.5-3.5L21 19z"/></symbol>
+    <symbol id="i-bin" viewBox="0 0 24 24"><path d="M5 7h14M10 7V4.5h4V7M7 7l.8 12h8.4L17 7M10.5 11v5M13.5 11v5"/></symbol>
+    <symbol id="i-drop" viewBox="0 0 24 24"><path d="M12 3.5s6 6.2 6 10.5a6 6 0 0 1-12 0c0-4.3 6-10.5 6-10.5z"/></symbol>
+    <symbol id="i-leaf" viewBox="0 0 24 24"><path d="M5 19c-.5-9 4.5-14 14-14 .5 9-4.5 14-14 14zM5 19l7-7"/></symbol>
+    <symbol id="i-other" viewBox="0 0 24 24"><circle cx="12" cy="12" r="5"/></symbol>
+    <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></symbol>
+    <symbol id="i-close" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></symbol>
+    <symbol id="i-play" viewBox="0 0 24 24"><path d="M8 5.5v13l10.5-6.5z"/></symbol>
+    <symbol id="i-orbit" viewBox="0 0 24 24"><ellipse cx="12" cy="12" rx="9.5" ry="4" transform="rotate(-30 12 12)"/><circle cx="12" cy="12" r="2.2"/><circle cx="19.6" cy="7.6" r="1.5" fill="currentColor" stroke="none"/></symbol>
+    <symbol id="i-reset" viewBox="0 0 24 24"><path d="M4.5 12a7.5 7.5 0 1 0 2.4-5.5"/><path d="M4.5 4.5v4.2h4.2"/></symbol>
+    <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></symbol>
+    <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2.8v2.4M12 18.8v2.4M2.8 12h2.4M18.8 12h2.4M5.5 5.5l1.7 1.7M16.8 16.8l1.7 1.7M18.5 5.5l-1.7 1.7M7.2 16.8l-1.7 1.7"/></symbol>
+    <symbol id="i-moon" viewBox="0 0 24 24"><path d="M20 14.5A8.5 8.5 0 0 1 9.5 4 8.5 8.5 0 1 0 20 14.5z"/></symbol>
+  </defs>
+</svg>
+
+<script src="vendor/maplibre-gl.js"></script>
+<script src="countries.js"></script>
+<script src="data.js"></script>
+<script src="config.js"></script>
+<script src="api.js"></script>
+<script src="app.js"></script>
+<script src="tour.js"></script>
+</body>
+</html>

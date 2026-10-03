@@ -252,11 +252,34 @@
     const h = HM.get(id), s = T[id], d = draftOf(h), fix = optOf(h, fixId || d.fixId);
     if (!fix) return;
     assignee = assignee || d.assignee;
-    const again = s.status === 'reopened';
+    const again = s.status === 'reopened', snap = writes(o, id) && structuredClone(s);
     Object.assign(s, { status: 'assigned', assignee, fixId: fix.id, assignedAt: now(), fate: null, inspect: null });   // a new round starts a new inspection
     log(h, `${again ? 'Assigned again' : 'Assigned'} to ${assignee}: ${fix.name}`);
     ui.draft = {};
-    commit({ toast: o.quiet ? '' : 'Ticket assigned', g: 'g-asg', cls: 's-work' });
+    commit({ toast: o.quiet || snap ? '' : 'Ticket assigned', g: 'g-asg', cls: 's-work' });
+    if (snap) writeBack(id, s, snap, 'action_assigned', assignee, `Assigned to ${assignee}: ${fix.name}`, { toast: 'Ticket assigned', g: 'g-asg', cls: 's-work' });
+  }
+
+  // write-back: on live data a click on a ticket is saved with PATCH /incidents/{id}, and the database's audit trail records who did it and why.
+  // The satellite pass stays simulated and in the browser, so no invented reading reaches the database; the tour and the self-check pass quiet and never write.
+  let apiBase = '';
+  const writes = (o, id) => !!apiBase && !o.quiet && !!D.meta?.live && /^MIRA-\d+$/.test(id);
+  function writeBack(id, s, snap, status, actor, note, done) {
+    fetch(`${apiBase}/incidents/${+id.slice(5)}`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json', Accept: 'application/json' }, signal: AbortSignal.timeout(8000),
+      body: JSON.stringify({ status, actor: (actor || 'operator').slice(0, 100), note: note.slice(0, 1000) }),
+    }).then(r => {
+      if (!r.ok) throw new Error(`answered ${r.status}`);
+      // Reset goes back to what the page loaded, so what the database now holds has to be in that copy too
+      const raw = D.hotspots.find(x => String(x.id) === id);
+      if (raw) raw.ticket = Object.assign(raw.ticket || {}, { status: s.status, assignee: s.assignee, fixId: s.fixId, assignedAt: s.assignedAt, fixAt: s.fixAt });
+      toast(`${done.toast}. Saved to the database.`, done.g, done.cls);
+    }).catch(e => {
+      console.warn('incident API:', e.message);
+      if (T[id] !== s) return;   // a reset or a newer change has replaced this ticket: leave it alone
+      T[id] = snap;
+      commit({ toast: 'Could not save to the database, so the change was undone.', g: 'g-re', cls: 's-open' });
+    });
   }
 
   // record what the operator found: { done: [step ids], cause: step id, note, sensor: kg/h or null }. The cause counts as checked
@@ -271,11 +294,15 @@
 
   function logFix(id, o = {}) {
     const h = HM.get(id), s = T[id], f = optOf(h, s.fixId), r = ins(h), steps = stepsOf(h), cause = steps.find(x => x[0] === r.cause);
+    const snap = writes(o, id) && structuredClone(s);
     s.status = 'fixed'; s.fixAt = now();
     s.fate = o.fate || (fnv(id + 'fate') < (f ? f.reliability : .7) ? 'ok' : 'fail');      // hidden: whether the fix really works
-    if (cause) log(h, `Inspection on site: source found at ${cause[1].toLowerCase()} (${r.done.length} of ${steps.length} checks)`);
-    log(h, `Fix logged by ${s.assignee || 'the operator'}: ${f ? f.name : 'fix applied'}${r.note ? `. Report: “${r.note}”` : ''}${r.sensor != null ? `. Ground sensor after repair: ${fmtRate(r.sensor)}` : ''}`);
-    commit({ toast: o.quiet ? '' : 'Fix logged. Waiting for the next satellite pass.', g: 'g-wait', cls: 's-wait' });
+    const found = cause ? `Inspection on site: source found at ${cause[1].toLowerCase()} (${r.done.length} of ${steps.length} checks)` : '';
+    const fixed = `Fix logged by ${s.assignee || 'the operator'}: ${f ? f.name : 'fix applied'}${r.note ? `. Report: “${r.note}”` : ''}${r.sensor != null ? `. Ground sensor after repair: ${fmtRate(r.sensor)}` : ''}`;
+    if (found) log(h, found);
+    log(h, fixed);
+    commit({ toast: o.quiet || snap ? '' : 'Fix logged. Waiting for the next satellite pass.', g: 'g-wait', cls: 's-wait' });
+    if (snap) writeBack(id, s, snap, 'awaiting_verification', s.assignee, `${found ? `${found}. ` : ''}${fixed}`, { toast: 'Fix logged. Waiting for the next satellite pass', g: 'g-wait', cls: 's-wait' });
   }
 
   function advancePass(o = {}) {
@@ -312,7 +339,7 @@
     ui.country = ''; ui.status = 'all'; ui.q = ''; $('#q').value = '';
     select(null); setTab('tickets');
     if (mapReady) flyHome();
-    if (!o.quiet) toast('Demo reset to its starting state');
+    if (!o.quiet) toast(D.meta?.live ? 'Back to the state saved in the database' : 'Demo reset to its starting state');
   }
 
   function commit(o = {}) {
@@ -1148,7 +1175,7 @@
 
     $('#b-pass').addEventListener('click', () => advancePass());
     $('#b-theme').addEventListener('click', () => setTheme(ui.theme === 'light' ? 'dark' : 'light'));
-    $('#b-reset').addEventListener('click', () => { if (confirm('Reset the demo? Every ticket goes back to its starting state.')) reset(); });
+    $('#b-reset').addEventListener('click', () => { if (confirm(D.meta?.live ? 'Reset the view? Simulated satellite passes are dropped. Changes already saved to the database stay.' : 'Reset the demo? Every ticket goes back to its starting state.')) reset(); });
 
     addEventListener('keydown', e => {
       if (e.metaKey || e.ctrlKey || e.altKey) return;
@@ -1185,7 +1212,10 @@
     const api = apiUrl();
     if (api && window.MRS_FROM_API) {
       $('#list').innerHTML = '<li class="empty"><p>Loading incidents…</p></li>';
-      try { data = await window.MRS_FROM_API(api, data.interventions); } catch (e) { console.warn('incident API:', e.message); failed = true; }
+      try {
+        data = await window.MRS_FROM_API(api, data.interventions);
+        apiBase = /\.json$/.test(api) ? '' : api.replace(/\/incidents\/?$/, '').replace(/\/$/, '');   // a saved .json snapshot cannot be written to
+      } catch (e) { console.warn('incident API:', e.message); failed = true; }
     }
     // data.js holds the offline copy of the database as raw API rows: adapt it the same way, so offline and live read alike
     if (data.rows && window.MRS_ADAPT) data = window.MRS_ADAPT(data.rows, data.interventions, { live: false, version: data.version });

@@ -37,6 +37,8 @@ Use port **5173**: the API only accepts pages from `localhost:5173` and `localho
 
 You can tell it is live when there is no message saying "Could not reach the incident API". The API's own page, with every route, is at http://127.0.0.1:8000/docs.
 
+With the live database, **Assign ticket** and **Log fix as applied** are saved (`PATCH /incidents/{id}`) and appear in each incident's audit trail at `/incidents/{id}/events`. The demo tour never writes, and the page without the API (the saved copy) never writes either.
+
 No `.env` file is needed: the defaults in `compose.yaml` and in the API match. To change the password or port, copy `.env.example` to `.env`.
 
 If something looks wrong, `docker compose down -v` followed by `docker compose up -d` rebuilds the database from scratch (it deletes the data in it, which is only the demo data).

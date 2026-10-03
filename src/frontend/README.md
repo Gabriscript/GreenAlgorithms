@@ -110,7 +110,7 @@ How each field is read:
 | `emission_rate_uncertainty_kg_hr` | "plus or minus" next to the rate |
 | `data_source` | where a real detection comes from, shown under the source with the credit its licence asks for |
 
-A real detection (`is_real: true`) is never touched by the simulated satellite pass, and the demo tour only acts on synthetic tickets, so no invented reading or fix is ever shown on real data.
+A real detection (`is_real: true`) can be taken through the whole loop too, so the demo works on every ticket: once its fix is logged, the next simulated pass verifies or reopens it. The ticket marks that result as simulated ("Simulated reading" with the verdict, "(simulated)" next to the satellite, "Simulated pass" in the activity log), because live only a real follow-up pass could confirm a fix. A real detection nobody has fixed never gets an invented reading, a simulated result is never written to the database, and the demo tour only acts on synthetic tickets.
 
 Not in the API, so assumed: region (left blank), persistence (0.5), readings after a fix (none) and the list of fixes (taken from `data.js`). A row the API calls verified but gives no reading for counts at the 70% target, and its ticket says so. On live data, assigning a ticket and logging a fix are saved to the database (see "Saved to the database" below); a satellite pass is simulated, so it stays in the browser and is dropped on reload. Run `MRS_ADAPT.check()` in the console to test the field rules.
 

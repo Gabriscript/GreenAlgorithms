@@ -310,16 +310,18 @@
     const t = now(), out = { verified: [], reopened: [], cloud: [] };
     for (const h of H) {
       const s = T[h.id];
-      if (s.status === 'verified' || h.real) continue;   // invented readings never go on a real detection: only a real follow-up pass can verify it
+      if (s.status === 'verified') continue;
       const cloudy = !o.noCloud && fnv(h.id + 'cl' + sim.n) < .14;
+      const pass = h.real ? 'Simulated pass' : 'Pass';   // a real detection is resolved by a simulated pass for the demo, and the ticket says so; live, only a real follow-up pass could
       if (s.status === 'fixed') {
-        if (cloudy) { s.passes.push({ t, rate: null, note: 'cloud' }); log(h, `Pass ${sim.n}: cloud cover, no clear reading. Waiting for the next pass.`); out.cloud.push(h); continue; }
+        if (h.real) s.sim = true;
+        if (cloudy) { s.passes.push({ t, rate: null, note: 'cloud' }); log(h, `${pass} ${sim.n}: cloud cover, no clear reading. Waiting for the next pass.`); out.cloud.push(h); continue; }
         const fate = s.fate || (fnv(h.id + 'fate') < (optOf(h, s.fixId)?.reliability ?? .7) ? 'ok' : 'fail');
         const cut = fate === 'ok' ? .78 + .19 * fnv(h.id + 'r' + sim.n) : .08 + .4 * fnv(h.id + 'r' + sim.n);
         s.passes.push({ t, rate: Math.round(h.rate * (1 - cut)), note: '' });
-        if (cut >= VERIFY) { s.status = 'verified'; log(h, `Pass ${sim.n}: ${pct(cut)} below baseline. Verified.`); out.verified.push(h); }
-        else { s.status = 'reopened'; log(h, `Pass ${sim.n}: only ${pct(cut)} below baseline. Target missed, ticket reopened.`); out.reopened.push(h); }
-      } else {
+        if (cut >= VERIFY) { s.status = 'verified'; log(h, `${pass} ${sim.n}: ${pct(cut)} below baseline. Verified.`); out.verified.push(h); }
+        else { s.status = 'reopened'; log(h, `${pass} ${sim.n}: only ${pct(cut)} below baseline. Target missed, ticket reopened.`); out.reopened.push(h); }
+      } else if (!h.real) {   // a real detection nobody has fixed gets no invented readings
         s.passes.push({ t, rate: cloudy ? null : Math.round(h.rate * (.88 + .24 * fnv(h.id + 'o' + sim.n))), note: cloudy ? 'cloud' : '' });
       }
     }
@@ -638,17 +640,19 @@
     const n4 = st === 'verified' ? 'done' : st === 'fixed' ? 'now' : st === 'reopened' ? 'bad' : 'todo';
     const t4 = { new: 'Starts after the fix', assigned: 'Starts after the fix', fixed: 'Waiting for the next pass', verified: 'Verified', reopened: 'Target missed' }[st];
     // three sources once a fix is logged: the operator's word, a ground sensor, and the satellite, which alone decides
-    const sCut = r.sensor != null ? 1 - r.sensor / h.rate : null, satCut = hasPostFix(h) ? red : null;
+    const sCut = r.sensor != null ? 1 - r.sensor / h.rate : null, satCut = hasPostFix(h) ? red : null, simR = h.real && !!s.sim;
     const evid = !s.fixAt || st === 'assigned' || st === 'new' ? '' :
       `<ul class="evid" aria-label="Evidence">` +
       `<li><span class="ev-k">Operator report</span><span>${r.note ? 'Repair reported' : 'Fix logged, no report'}</span><span class="ev-s">Claim</span></li>` +
       `<li><span class="ev-k">Ground sensor</span><span>${sCut != null ? `${fmtRate(r.sensor)}, ${pct(Math.max(0, sCut))} lower` : 'No reading'}</span><span class="ev-s">Supports</span></li>` +
-      `<li><span class="ev-k">Satellite</span><span>${satCut != null ? `${pct(Math.max(0, satCut))} lower` : 'Waiting for a clear pass'}</span><span class="ev-s">Decides</span></li></ul>` +
+      `<li><span class="ev-k">Satellite</span><span>${satCut != null ? `${pct(Math.max(0, satCut))} lower${simR ? ' (simulated)' : ''}` : 'Waiting for a clear pass'}</span><span class="ev-s">Decides</span></li></ul>` +
       `${sCut != null && satCut != null && (sCut >= VERIFY) !== (satCut >= VERIFY) ? `<p class="why">The sources disagree: the ground sensor shows ${pct(Math.max(0, sCut))} lower, the satellite ${pct(Math.max(0, satCut))}. The satellite sees the whole site; a sensor by the repaired part can miss gas escaping elsewhere.</p>` : ''}`;
-    const verdict = st === 'fixed' && h.real ? '<p class="verdict"><svg class="gl s-wait" aria-hidden="true"><use href="#g-wait"/></svg>Fix logged. This is a real detection, so only a real follow-up pass can verify it; the simulated passes leave it alone. To see the whole loop, open a ticket marked “Simulated detection”.</p>'
+    // a real detection is resolved by a simulated pass here, to show the loop; live, only a real follow-up satellite pass could confirm it
+    const simTag = simR ? '<span class="ph">Simulated reading</span> Not a real measurement: on a real detection only a real follow-up satellite pass could confirm this. ' : '';
+    const verdict = st === 'fixed' && h.real ? '<p class="verdict"><svg class="gl s-wait" aria-hidden="true"><use href="#g-wait"/></svg>Fix logged. The next clear pass decides. This is a real detection, so the pass is simulated for the demo; live, only a real follow-up satellite pass could confirm it.</p>'
       : st === 'fixed' ? '<p class="verdict"><svg class="gl s-wait" aria-hidden="true"><use href="#g-wait"/></svg>Fix logged. The next clear pass decides.</p>'
-      : st === 'verified' ? `<p class="verdict"><svg class="gl s-ok" aria-hidden="true"><use href="#g-ok"/></svg>${hasPostFix(h) ? `${pct(red)} lower than baseline. The target was ${pct(VERIFY)}.` : `Marked verified, but the data has no reading. Counted at the ${pct(VERIFY)} target.`}</p>`
-      : st === 'reopened' ? `<p class="verdict"><svg class="gl s-open" aria-hidden="true"><use href="#g-re"/></svg>Only ${pct(Math.max(0, red))} lower. The target was ${pct(VERIFY)}, so the ticket is open again.</p>`
+      : st === 'verified' ? `<p class="verdict"><svg class="gl s-ok" aria-hidden="true"><use href="#g-ok"/></svg><span>${simTag}${hasPostFix(h) ? `${pct(red)} lower than baseline. The target was ${pct(VERIFY)}.` : `Marked verified, but the data has no reading. Counted at the ${pct(VERIFY)} target.`}</span></p>`
+      : st === 'reopened' ? `<p class="verdict"><svg class="gl s-open" aria-hidden="true"><use href="#g-re"/></svg><span>${simTag}Only ${pct(Math.max(0, red))} lower. The target was ${pct(VERIFY)}, so the ticket is open again.</span></p>`
       : `<p class="summary">A fix counts once a clear pass shows the plume at least ${pct(VERIFY)} below its baseline of <b>${fmtRate(h.rate)}</b>.</p>`;
     const s4 = `<section class="stg" aria-labelledby="h-ver"><div class="rail">${node(n4, 5)}</div><div class="stg-b">` +
       `<div class="st-h"><h3 id="h-ver">Verification</h3><span class="state">${t4}</span></div>${verdict}${evid}${chartHTML(h)}` +
@@ -1234,8 +1238,8 @@
     const eq = (a, b, m) => { if (a !== b) throw new Error(`${m}: expected ${b}, got ${a}`); };
     const ok = (c, m) => { if (!c) throw new Error(m); };
     reset({ quiet: true });
-    const [a, b] = H.filter(h => T[h.id].status === 'new' && !h.real).sort((x, y) => y.rate - x.rate);   // synthetic: the simulated pass leaves real detections alone
-    const r = H.find(h => h.real && T[h.id].status === 'new');
+    const [a, b] = H.filter(h => T[h.id].status === 'new' && !h.real).sort((x, y) => y.rate - x.rate);
+    const [r, r2] = H.filter(h => h.real && T[h.id].status === 'new');   // r is fixed and resolved by a simulated pass, r2 is left alone
     eq(kpis().n.ok, H.filter(h => h.seed?.status === 'verified').length, 'starting verified count');
     const db = H.find(h => T[h.id].status === 'assigned' && !T[h.id].assignedAt);
     if (db) ok(dueInfo(db).text.includes('from detection'), 'a ticket that arrives assigned with no date counts its deadline from detection');
@@ -1248,9 +1252,11 @@
     ok(T[a.id].events.some(e => e.text.startsWith('Inspection on site')), 'the inspection result goes into the activity log');
     eq(remaining(a), a.rate, 'a fix no satellite has confirmed does not count');
     dispatch(b.id, null, null, { quiet: true }); logFix(b.id, { fate: 'fail', quiet: true });
-    const realPasses = r ? passesOf(r).length : 0;
+    if (r) { dispatch(r.id, null, null, { quiet: true }); logFix(r.id, { fate: 'ok', quiet: true }); }
+    const idle = r2 ? passesOf(r2).length : 0;
     advancePass({ noCloud: true });
-    if (r) eq(passesOf(r).length, realPasses, 'a simulated pass adds no readings to a real detection');
+    if (r) { eq(T[r.id].status, 'verified', 'a fixed real detection is resolved by the simulated pass, for the demo'); ok(T[r.id].sim && T[r.id].events.some(e => e.text.startsWith('Simulated pass')), 'and the ticket says the pass was simulated'); }
+    if (r2) eq(passesOf(r2).length, idle, 'a real detection nobody has fixed gets no invented reading');
     eq(T[a.id].status, 'verified', 'a fix that works is verified by the next pass');
     eq(T[b.id].status, 'reopened', 'a fix that fails reopens the ticket');
     ok(1 - curRate(a) / a.rate >= VERIFY, `verified means at least ${pct(VERIFY)} lower`);

@@ -6,6 +6,41 @@ README). The database holds synthetic demo incidents plus a small sample of real
 satellite detections, and keeps an append-only audit trail of every change.
 There is no authentication, satellite ingestion or AI yet.
 
+## Quick start
+
+**Fastest, nothing to install:** open `src/frontend/index.html` in a browser. It shows a saved copy of the database, so you can try every screen, including **Play demo tour**.
+
+**Full version, with the live database and API** (about five minutes). You need:
+
+- [Docker Desktop](https://www.docker.com/products/docker-desktop/), running, for the database
+- [Python](https://www.python.org/downloads/) 3.11 or newer, for the API and to serve the page
+
+Run these from the repository root, each step in its own terminal where it says so:
+
+```powershell
+# 1. Database (PostgreSQL + PostGIS). The first start loads the tables and demo data by itself.
+docker compose up -d
+
+# 2. API: install once, then run (keep this terminal open)
+python -m venv .venv
+.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+uvicorn src.backend.main:app --reload
+
+# 3. Web page (second terminal, keep it open)
+python -m http.server 5173 --directory src/frontend
+```
+
+Then open **http://localhost:5173**. On macOS or Linux, activate the environment with `source .venv/bin/activate` instead.
+
+Use port **5173**: the API only accepts pages from `localhost:5173` and `localhost:3000` (`CORS_ORIGINS`). Any other port is blocked by the browser, and the page quietly falls back to the saved copy.
+
+You can tell it is live when there is no message saying "Could not reach the incident API". The API's own page, with every route, is at http://127.0.0.1:8000/docs.
+
+No `.env` file is needed: the defaults in `compose.yaml` and in the API match. To change the password or port, copy `.env.example` to `.env`.
+
+If something looks wrong, `docker compose down -v` followed by `docker compose up -d` rebuilds the database from scratch (it deletes the data in it, which is only the demo data).
+
 ## Database layout
 
 - `src/backend/db/migrations/001_create_methane_incidents.sql` enables PostGIS,
@@ -98,8 +133,8 @@ Allowed development frontend origins are configured with the comma-separated
   `note` on its own is recorded as a note event. Without `actor`, the change
   is recorded as made by `api`.
 
-CORS allows `GET` only, so a browser cannot call `PATCH` yet. To let the front
-end write, add `"PATCH"` to `allow_methods` in `src/backend/main.py`.
+CORS allows every method, so the front end can call `PATCH` from an allowed
+origin.
 
 ## Audit trail
 

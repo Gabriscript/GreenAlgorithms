@@ -384,15 +384,14 @@
     if (ui.country && ui.country !== iso && mapReady) map.setFeatureState({ source: 'countries', id: ui.country }, { focus: false });
     ui.country = iso; setTab('tickets'); renderQueue(); renderCountries();
     if (!mapReady) return;
-    stopSpin();   // the spin's jumpTo would cancel the flight below
     map.setFeatureState({ source: 'countries', id: iso }, { focus: true });
     const hs = H.filter(h => h.iso === iso);
-    if (hs.length === 1) map.flyTo({ center: [hs[0].lon, hs[0].lat], zoom: 4.8, padding: pads() });
+    if (hs.length === 1) flyStill({ center: [hs[0].lon, hs[0].lat], zoom: 4.8, padding: pads() });
     else {
       const b = new maplibregl.LngLatBounds(); hs.forEach(h => b.extend([h.lon, h.lat]));
       // the map already carries pads() as its padding and fitting adds the option's padding on top, so pass the margin only (fitBounds with pads() + 50 threw on phones)
       let cam; try { cam = map.cameraForBounds(b, { padding: 50 }); } catch (e) { /* no room to fit: fall back to a fixed zoom */ }
-      map.flyTo({ center: cam ? cam.center : b.getCenter(), zoom: cam ? Math.min(cam.zoom, 5.4) : 3, padding: pads(), speed: .9, curve: 1.5 });   // cameraForBounds ignores maxZoom on the globe, so clamp here
+      flyStill({ center: cam ? cam.center : b.getCenter(), zoom: cam ? Math.min(cam.zoom, 5.4) : 3, padding: pads(), speed: .9, curve: 1.5 });   // cameraForBounds ignores maxZoom on the globe, so clamp here
     }
   }
 
@@ -733,7 +732,9 @@
   }
 
   const easePads = () => map && map.easeTo({ padding: pads(), duration: reduced() ? 0 : 400 });
-  const flyHome = () => { if (!map) return; stopSpin(); map.flyTo({ center: HOME, zoom: homeZoom(), padding: pads(), speed: .9, curve: 1.5 }); };
+  // flyTo first, then stop the spin: flyTo cancels a running ease, and that ease's moveend would restart the spin, whose jumpTo then cancels this flight
+  const flyStill = o => { map.flyTo(o); stopSpin(); };
+  const flyHome = () => { if (!map) return; flyStill({ center: HOME, zoom: homeZoom(), padding: pads(), speed: .9, curve: 1.5 }); };
   const flyTo = h => map && map.flyTo({ center: [h.lon, h.lat], zoom: clamp(map.getZoom(), 4.2, 5.2), padding: pads(), speed: .9, curve: 1.5 });
 
   function graticule() {
@@ -1000,7 +1001,7 @@
   };
 
   // globe / flat switch. The icon shows the view a click leads to: a flat map while on the globe, a sphere while flat
-  const FLAT = '<rect x="3" y="6" width="18" height="12" rx="1.5"/><path d="M9 6v12M15 6v12M3 12h18"/>';
+  const FLAT = '<path d="M3 6.5l6-2.5 6 2.5 6-2.5v13.5l-6 2.5-6-2.5-6 2.5z"/><path d="M9 4v13.5M15 6.5V20"/>';   // a folded paper map
   const SPHERE = '<circle cx="12" cy="12" r="8.5"/><ellipse cx="12" cy="12" rx="3.6" ry="8.5"/><path d="M3.5 12h17"/>';
   const globeCtl = {
     onAdd(m) {

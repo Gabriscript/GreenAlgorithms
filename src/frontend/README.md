@@ -119,7 +119,7 @@ Not in the API, so assumed: region (left blank), persistence (0.5), readings aft
 **What is simulated today** and needs real wiring:
 
 - `advancePass()` in `app.js` invents satellite readings. Real readings should arrive as `ticket.passes` entries after `fixAt`, and `meta.simulated: false` hides the simulate button.
-- `dispatch()` and `logFix()` change state in the browser only (saved to `localStorage` for the offline copy, dropped on reload for live data). The backend already has `PATCH /incidents/{id}` for `status` and `severity`, but its CORS rule allows `GET` only, so a browser cannot call it yet. To write back: the backend adds `PATCH` to `allow_methods` in `src/backend/main.py`, then `dispatch()` sends `action_assigned` and `logFix()` sends `awaiting_verification`.
+- `dispatch()` and `logFix()` change state in the browser only (saved to `localStorage` for the offline copy, dropped on reload for live data). The backend already has `PATCH /incidents/{id}` for `status` and `severity`, and its CORS rule allows every method, so a browser can call it. To write back, `dispatch()` has to send `action_assigned` and `logFix()` `awaiting_verification`.
 - "Log fix as applied" stands in for the operator's report, and the inspection checks, report and ground-sensor reading are typed in on the regulator's screen. In production they arrive from the operator's own app and from sensors on site. A ticket that arrives from the database with its fix already reported is treated as reported when the data was loaded, since the database has no fix date.
 
 ## Files

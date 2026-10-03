@@ -937,6 +937,8 @@
     document.fonts?.ready.then(() => { labels.forEach(l => { l.w = l.d.firstChild.offsetWidth; }); updateLabels(); });
   }
   const angle = (a, b) => Math.acos(clamp(Math.sin(a.lat * rad) * Math.sin(b.lat * rad) + Math.cos(a.lat * rad) * Math.cos(b.lat * rad) * Math.cos((a.lng - b.lon) * rad), -1, 1)) / rad;
+  // the flat map repeats east and west, so project the copy of a place that sits nearest the view centre (the globe ignores this)
+  const proj = h => map.project([h.lon + 360 * Math.round((map.getCenter().lng - h.lon) / 360), h.lat]);
   const onFarSide = h => { let g = 'globe'; try { g = map.getProjection().type; } catch (e) { /* older API */ } return g === 'globe' && angle(map.getCenter(), h) > (map.getZoom() < 3 ? 80 : 65); };
 
   function updateLabels() {
@@ -951,7 +953,7 @@
       const c = cStats.get(L.iso);
       let on = !!c && z >= 1.3 && shown < cap && !onFarSide(c) && !(L.iso === selIso && z >= 4);   // the open ticket already names its country
       if (on) {
-        const p = map.project([c.lon, c.lat]), y = p.y + c.kmax * zs + 8;
+        const p = proj(c), y = p.y + c.kmax * zs + 8;
         if (p.x < Math.max(24, p0.left - 40) || y < 20 || p.x > W - Math.max(24, p0.right - 40) || y > HH - 24) on = false;
         else {
           const w = (L.w || c.name.length * 6.6) + 10, r = { x: p.x - w / 2, y, w, h: 16 };
@@ -968,7 +970,7 @@
   // a one-off ring where a plume has just flipped
   function burst(h, color) {
     if (!mapReady || calm() || onFarSide(h)) return;
-    const p = map.project([h.lon, h.lat]), b = el('div', 'burst');
+    const p = proj(h), b = el('div', 'burst');
     b.style.cssText = `transform:translate(${p.x.toFixed(1)}px,${p.y.toFixed(1)}px);--c:${color}`;
     $('#stage').append(b);
     setTimeout(() => b.remove(), 1400);
@@ -997,15 +999,37 @@
     onRemove() { this.d.remove(); },
   };
 
+  // globe / flat switch. The icon shows the view a click leads to: a flat map while on the globe, a sphere while flat
+  const FLAT = '<rect x="3" y="6" width="18" height="12" rx="1.5"/><path d="M9 6v12M15 6v12M3 12h18"/>';
+  const SPHERE = '<circle cx="12" cy="12" r="8.5"/><ellipse cx="12" cy="12" rx="3.6" ry="8.5"/><path d="M3.5 12h17"/>';
+  const globeCtl = {
+    onAdd(m) {
+      const d = el('div', 'maplibregl-ctrl maplibregl-ctrl-group'), b = el('button', 'mctl');
+      b.type = 'button';
+      b.innerHTML = '<svg class="ic" viewBox="0 0 24 24" aria-hidden="true"></svg>';
+      const isGlobe = () => { try { return m.getProjection().type === 'globe'; } catch (e) { return true; } };   // not readable until the style loads; the map starts as a globe
+      const sync = () => {
+        const globe = isGlobe(), to = globe ? 'flat map' : 'globe';
+        b.firstChild.innerHTML = globe ? FLAT : SPHERE;
+        b.setAttribute('aria-label', `Switch to ${to}`); b.title = `Switch to ${to}`;
+      };
+      b.addEventListener('click', () => m.setProjection({ type: isGlobe() ? 'mercator' : 'globe' }));
+      m.on('projectiontransition', sync); m.on('style.load', sync);
+      d.append(b); this.d = d; sync();
+      return d;
+    },
+    onRemove() { this.d.remove(); },
+  };
+
   function initMap() {
     if (!window.maplibregl) return fallback();
     try {
-      map = new maplibregl.Map({ container: 'map', style: baseStyle(), center: HOME, zoom: homeZoom(), minZoom: .8, maxZoom: 7.5, maxPitch: 0, dragRotate: false, attributionControl: false, renderWorldCopies: false, fadeDuration: 0, canvasContextAttributes: { antialias: true } });
+      map = new maplibregl.Map({ container: 'map', style: baseStyle(), center: HOME, zoom: homeZoom(), minZoom: .8, maxZoom: 7.5, maxPitch: 0, dragRotate: false, attributionControl: false, renderWorldCopies: true, fadeDuration: 0, canvasContextAttributes: { antialias: true } });
     } catch (e) { map = null; return fallback(); }
     map.setPadding(pads());
     map.touchZoomRotate.disableRotation();
     map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'bottom-right');
-    if (maplibregl.GlobeControl) map.addControl(new maplibregl.GlobeControl(), 'bottom-right');
+    map.addControl(globeCtl, 'bottom-right');
     map.addControl(motionCtl, 'bottom-right');
     map.on('load', onMapLoad);
     map.on('error', e => console.warn('map:', e && e.error && e.error.message));
